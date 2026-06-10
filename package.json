@@ -1,6 +1,6 @@
 {
   "name": "bioskill",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "One command to install bio agent skills into your AI coding agent. Powered by awesome-bio-agent-skills.",
   "keywords": [
     "bioinformatics",
