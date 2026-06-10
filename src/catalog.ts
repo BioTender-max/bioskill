@@ -1,9 +1,24 @@
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { execSync } from "node:child_process";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import { parse as parseYaml } from "yaml";
 import { CACHE_DIR, REPO_DIR, REPO_URL, SKILLS_SUBDIR, ensureDir } from "./util/paths.js";
 import { log } from "./util/log.js";
+
+// Derive the codeload tarball URL from REPO_URL.
+// Default: https://github.com/BioTender-max/awesome-bio-agent-skills.git
+//      -> https://codeload.github.com/BioTender-max/awesome-bio-agent-skills/tar.gz/main
+function tarballUrl(): string {
+  const m = REPO_URL.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (!m) {
+    throw new Error(`Cannot derive tarball URL from REPO_URL=${REPO_URL}`);
+  }
+  const branch = process.env.BIOSKILL_REPO_BRANCH || "main";
+  return `https://codeload.github.com/${m[1]}/${m[2]}/tar.gz/${branch}`;
+}
 
 export type Skill = {
   name: string;          // skill folder name (the identifier)
@@ -24,34 +39,84 @@ type CsvRow = {
   archive_path: string;
 };
 
-function run(cmd: string, opts: { cwd?: string; silent?: boolean } = {}): string {
-  return execSync(cmd, {
-    cwd: opts.cwd,
-    stdio: opts.silent ? ["ignore", "pipe", "ignore"] : ["ignore", "pipe", "inherit"],
-    encoding: "utf8",
-  });
-}
-
 export async function syncRepo(opts: { force?: boolean } = {}): Promise<void> {
   ensureDir(CACHE_DIR);
 
-  const gitDir = path.join(REPO_DIR, ".git");
+  // We treat the cache as "populated" if the skills/ subdir exists.
+  const skillsDir = path.join(REPO_DIR, SKILLS_SUBDIR);
+  const populated = fs.existsSync(skillsDir);
 
-  if (!fs.existsSync(gitDir)) {
-    log.info(`Cloning skill catalog into ${REPO_DIR}`);
-    run(`git clone --depth=1 ${REPO_URL} ${REPO_DIR}`);
-    log.ok("Catalog ready.");
-    return;
+  if (populated && !opts.force) return;
+
+  await downloadAndExtract();
+}
+
+async function downloadAndExtract(): Promise<void> {
+  const url = tarballUrl();
+  log.info(`Downloading skill catalog from ${url}`);
+
+  const tmpFile = path.join(
+    os.tmpdir(),
+    `bioskill-${Date.now()}-${process.pid}.tar.gz`,
+  );
+
+  // Stream download to tmp file. Native fetch in Node 18+.
+  const res = await fetch(url, {
+    headers: { "User-Agent": "bioskill-cli" },
+    redirect: "follow",
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Download failed: HTTP ${res.status} ${res.statusText}`);
   }
 
-  if (opts.force) {
-    log.info("Updating skill catalog");
+  await pipeline(
+    Readable.fromWeb(res.body as any),
+    fs.createWriteStream(tmpFile),
+  );
+
+  // Extract into a clean staging dir, then atomically swap REPO_DIR.
+  const stagingDir = path.join(CACHE_DIR, `.staging-${Date.now()}-${process.pid}`);
+  ensureDir(stagingDir);
+
+  try {
+    // System tar exists on macOS, Linux, and Windows 10 1803+.
+    execSync(`tar -xzf "${tmpFile}" -C "${stagingDir}"`, { stdio: ["ignore", "ignore", "pipe"] });
+  } catch (e: unknown) {
+    cleanup(tmpFile, stagingDir);
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `tar extraction failed: ${msg}\n` +
+        `Make sure 'tar' is installed and on PATH. On Windows, use Windows 10 1803+ which ships tar.exe.`,
+    );
+  }
+
+  // The tarball extracts to <repo>-<branch>/. Find it.
+  const entries = fs.readdirSync(stagingDir).filter((n) => !n.startsWith("."));
+  if (entries.length !== 1) {
+    cleanup(tmpFile, stagingDir);
+    throw new Error(`Unexpected tarball layout in ${stagingDir}: ${entries.join(", ")}`);
+  }
+  const extractedDir = path.join(stagingDir, entries[0]);
+
+  // Swap into place.
+  if (fs.existsSync(REPO_DIR)) {
+    fs.rmSync(REPO_DIR, { recursive: true, force: true });
+  }
+  fs.renameSync(extractedDir, REPO_DIR);
+
+  cleanup(tmpFile, stagingDir);
+  log.ok("Catalog ready.");
+}
+
+function cleanup(...paths: string[]) {
+  for (const p of paths) {
     try {
-      run(`git fetch --depth=1 origin main`, { cwd: REPO_DIR, silent: true });
-      run(`git reset --hard origin/main`, { cwd: REPO_DIR, silent: true });
-      log.ok("Catalog updated.");
-    } catch (e) {
-      log.warn("Catalog update failed, using cached copy.");
+      if (!fs.existsSync(p)) continue;
+      const st = fs.statSync(p);
+      if (st.isDirectory()) fs.rmSync(p, { recursive: true, force: true });
+      else fs.unlinkSync(p);
+    } catch {
+      /* ignore */
     }
   }
 }
