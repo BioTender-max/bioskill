@@ -1,0 +1,51 @@
+{
+  "name": "bioskill",
+  "version": "0.1.0",
+  "description": "One command to install bio agent skills into your AI coding agent. Powered by awesome-bio-agent-skills.",
+  "keywords": [
+    "bioinformatics",
+    "ai-agent",
+    "skills",
+    "claude-code",
+    "mimocode",
+    "opencode",
+    "biology",
+    "llm"
+  ],
+  "homepage": "https://github.com/BioTender-max/bioskill",
+  "bugs": "https://github.com/BioTender-max/bioskill/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BioTender-max/bioskill.git"
+  },
+  "license": "MIT",
+  "author": "BioTender",
+  "type": "module",
+  "bin": {
+    "bioskill": "./bin/bioskill.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node bin/bioskill.js",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picocolors": "^1.0.1",
+    "yaml": "^2.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.4"
+  }
+}
